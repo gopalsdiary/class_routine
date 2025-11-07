@@ -97,8 +97,11 @@ function displayTasks() {
     });
     deleteButton.addEventListener("pointerdown", (e) => {
       e.stopPropagation(); // Prevent event bubbling
-      deleteTask(index); // Delete the task when the delete button is clicked
-      console.log("delete");
+      const ok = window.confirm("আপনি কি মুছে ফেলতে চান?");
+      if (ok) {
+        deleteTask(index); // Delete the task when the delete button is clicked
+        console.log("delete");
+      }
     });
     // -------------------------------------------------------------------------------
 
