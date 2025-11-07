@@ -239,16 +239,16 @@ function resetTasksIfDateChanged() {
 //--------------------------------------------------------------------------------
 
 // Call this function on page load
-window.onload = () => {
+window.onload = async () => {
   try {
     initializeTabs(); // Initialize the tabs with days of the week
     resetTasksIfDateChanged(); // Ensure tasks are reset if the date has changed
     countClass(); // Update the task count
     tickTheClassByTheTime(); // Call the function to mark tasks as completed based on the time
     timeEnd = setInterval(tickTheClassByTheTime, 10000); // Check every 10 seconds
-    requestNotificationPermission(); // Ask for notification permission
+    await requestNotificationPermission(); // Ask for notification permission (wait for it)
     setupServiceWorkerMessaging(); // Listen for SW messages
-    requestWakeLock(); // Request wake lock for active class periods
+    await requestWakeLock(); // Request wake lock for active class periods (wait for it)
     scheduleUpcomingNotifications(); // Pre-schedule notifications
   } catch (err) {
     console.error("Initialization error", err);
@@ -408,38 +408,43 @@ function countClass() {
 // -------------------------------------------------------------------
 
 // ------------------------ Notifications -----------------------------
-function requestNotificationPermission() {
+async function requestNotificationPermission() {
   if (!("Notification" in window)) {
     console.warn("Notifications not supported");
-    return;
+    return false;
   }
   
   if (Notification.permission === "granted") {
     console.log("Notification permission already granted");
-    return;
+    return true;
   }
   
   if (Notification.permission === "default") {
-    // Request permission explicitly
-    Notification.requestPermission().then((permission) => {
+    try {
+      // Request permission explicitly
+      const permission = await Notification.requestPermission();
       console.log("Notification permission:", permission);
       if (permission === "granted") {
         // Show a test notification on Android to confirm it works
         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
-          navigator.serviceWorker.ready.then((reg) => {
-            reg.showNotification("Class Routine", {
-              body: "Notifications are enabled! You'll get alerts when tasks are due.",
-              icon: "icon-192x192.png",
-              vibrate: [200],
-              tag: "permission-granted",
-            });
+          const reg = await navigator.serviceWorker.ready;
+          await reg.showNotification("Class Routine", {
+            body: "Notifications are enabled! You'll get alerts when tasks are due.",
+            icon: "icon-192x192.png",
+            vibrate: [200],
+            tag: "permission-granted",
           });
         }
+        return true;
       }
-    }).catch((err) => {
+      return false;
+    } catch (err) {
       console.error("Notification permission error:", err);
-    });
+      return false;
+    }
   }
+  
+  return Notification.permission === "granted";
 }
 
 function sendTaskNotification(task) {
@@ -555,10 +560,12 @@ function setupServiceWorkerMessaging() {
 }
 
 // ------------------------ Wake Lock API -----------------------------
+let visibilityListener = null; // Store listener to avoid duplicates
+
 async function requestWakeLock() {
   if (!("wakeLock" in navigator)) {
     console.log("Wake Lock API not supported");
-    return;
+    return false;
   }
 
   try {
@@ -571,21 +578,38 @@ async function requestWakeLock() {
 
       wakeLock.addEventListener("release", () => {
         console.log("Wake Lock released");
+        wakeLock = null;
       });
 
+      // Remove old listener if exists
+      if (visibilityListener) {
+        document.removeEventListener("visibilitychange", visibilityListener);
+      }
+
       // Re-request if page becomes visible again
-      document.addEventListener("visibilitychange", async () => {
+      visibilityListener = async () => {
         if (document.visibilityState === "visible" && !wakeLock) {
           const nowCheck = new Date();
           const hourCheck = nowCheck.getHours();
           if (hourCheck >= 7 && hourCheck < 16) {
-            wakeLock = await navigator.wakeLock.request("screen");
+            try {
+              wakeLock = await navigator.wakeLock.request("screen");
+              console.log("Wake Lock re-acquired");
+            } catch (e) {
+              console.error("Wake Lock re-acquire error:", e);
+            }
           }
         }
-      });
+      };
+      document.addEventListener("visibilitychange", visibilityListener);
+      return true;
+    } else {
+      console.log("Wake Lock not requested (outside class hours)");
+      return false;
     }
   } catch (err) {
     console.error("Wake Lock error:", err);
+    return false;
   }
 }
 
@@ -647,7 +671,10 @@ function scheduleUpcomingNotifications() {
 settingsButton.addEventListener("click", () => {
   settingsPopup.style.display = "flex";
   shadowPopup.style.display = "block";
-  updateSettingsUI();
+  // Update UI after a brief delay to ensure DOM is ready
+  setTimeout(() => {
+    updateSettingsUI();
+  }, 50);
 });
 
 $("#settingsClose").addEventListener("click", () => {
@@ -655,11 +682,12 @@ $("#settingsClose").addEventListener("click", () => {
   shadowPopup.style.display = "none";
 });
 
-$("#testNotification").addEventListener("click", () => {
+$("#testNotification").addEventListener("click", async () => {
   if (navigator.serviceWorker && navigator.serviceWorker.ready) {
-    navigator.serviceWorker.ready.then((reg) => {
+    try {
+      const reg = await navigator.serviceWorker.ready;
       const enableVibration = localStorage.getItem("enableVibration") !== "false";
-      reg.showNotification("Test Notification 🔔", {
+      await reg.showNotification("Test Notification 🔔", {
         body: "This is a test notification from Class Routine!",
         icon: "icon-192x192.png",
         badge: "icon-192x192.png",
@@ -671,15 +699,21 @@ $("#testNotification").addEventListener("click", () => {
           { action: "snooze", title: "⏰ Snooze" },
         ],
       });
-    });
+      console.log("Test notification sent");
+    } catch (e) {
+      console.error("Test notification error:", e);
+      alert("Notification failed: " + e.message);
+    }
   } else {
     alert("Service Worker not ready. Please reload the page.");
   }
 });
 
-$("#requestPermissionBtn").addEventListener("click", () => {
-  requestNotificationPermission();
-  setTimeout(updateSettingsUI, 500);
+$("#requestPermissionBtn").addEventListener("click", async () => {
+  await requestNotificationPermission();
+  setTimeout(() => {
+    updateSettingsUI();
+  }, 500);
 });
 
 $("#enableReminders").addEventListener("change", (e) => {
@@ -699,11 +733,19 @@ function updateSettingsUI() {
   const enableReminders = $("#enableReminders");
   const enableVibration = $("#enableVibration");
 
+  // Check if elements exist (important for Android)
+  if (!permissionStatus || !wakeLockStatus) {
+    console.warn("Settings UI elements not found");
+    return;
+  }
+
+  // Update notification permission status
   if ("Notification" in window) {
-    if (Notification.permission === "granted") {
+    const permission = Notification.permission;
+    if (permission === "granted") {
       permissionStatus.textContent = "✓ Granted";
       permissionStatus.style.color = "#36f0a2";
-    } else if (Notification.permission === "denied") {
+    } else if (permission === "denied") {
       permissionStatus.textContent = "✗ Denied";
       permissionStatus.style.color = "#f05236";
     } else {
@@ -715,16 +757,43 @@ function updateSettingsUI() {
     permissionStatus.style.color = "#888";
   }
 
-  if (wakeLock) {
-    wakeLockStatus.textContent = "✓ Active";
-    wakeLockStatus.style.color = "#36f0a2";
+  // Update wake lock status
+  if ("wakeLock" in navigator) {
+    if (wakeLock && !wakeLock.released) {
+      wakeLockStatus.textContent = "✓ Active";
+      wakeLockStatus.style.color = "#36f0a2";
+    } else {
+      const now = new Date();
+      const hour = now.getHours();
+      if (hour >= 7 && hour < 16) {
+        wakeLockStatus.textContent = "⚠ Available (tap to activate)";
+        wakeLockStatus.style.color = "#f0a236";
+        wakeLockStatus.style.cursor = "pointer";
+        wakeLockStatus.onclick = async () => {
+          const success = await requestWakeLock();
+          if (success) {
+            updateSettingsUI();
+          }
+        };
+      } else {
+        wakeLockStatus.textContent = "Outside class hours (7AM-4PM)";
+        wakeLockStatus.style.color = "#888";
+      }
+    }
   } else {
-    wakeLockStatus.textContent = "Inactive";
+    wakeLockStatus.textContent = "Not supported";
     wakeLockStatus.style.color = "#888";
   }
 
-  enableReminders.checked = localStorage.getItem("enableReminders") !== "false";
-  enableVibration.checked = localStorage.getItem("enableVibration") !== "false";
+  // Update checkboxes
+  if (enableReminders) {
+    enableReminders.checked = localStorage.getItem("enableReminders") !== "false";
+  }
+  if (enableVibration) {
+    enableVibration.checked = localStorage.getItem("enableVibration") !== "false";
+  }
+  
+  console.log("Settings UI updated - Permission:", Notification.permission, "WakeLock:", wakeLock ? "active" : "inactive");
 }
 
 
