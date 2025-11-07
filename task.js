@@ -7,6 +7,7 @@ function $$(selector) {
 // Every comments are written at the end of the statement
 
 let tasks = JSON.parse(localStorage.getItem("tasks")) || {}; // Initialize tasks from local storage. If no tasks are found, initialize with an empty object
+let timeEnd; // interval reference for ticking tasks
 const currentDay = new Date().toLocaleString("en-us", {
   weekday: "short",
 }); // Get the current day in short format (e.g., "Mon", "Tue", etc.)
@@ -232,13 +233,19 @@ function resetTasksIfDateChanged() {
 
 // Call this function on page load
 window.onload = () => {
-  initializeTabs(); // Initialize the tabs with days of the week
-  resetTasksIfDateChanged(); // Ensure tasks are reset if the date has changed
-  countClass(); // Update the task count
-  tickTheClassByTheTime(); // Call the function to mark tasks as completed based on the time
-  const timeEnd = setInterval(tickTheClassByTheTime, 10000); // Check every 10 seconds
-  $("#loading").style.display = "none"; // Hide the loading screen
-}; // Call the function to reset tasks if the date has changed
+  try {
+    initializeTabs(); // Initialize the tabs with days of the week
+    resetTasksIfDateChanged(); // Ensure tasks are reset if the date has changed
+    countClass(); // Update the task count
+    tickTheClassByTheTime(); // Call the function to mark tasks as completed based on the time
+    timeEnd = setInterval(tickTheClassByTheTime, 10000); // Check every 10 seconds
+  } catch (err) {
+    console.error("Initialization error", err);
+  } finally {
+    const loader = $("#loading");
+    if (loader) loader.style.display = "none"; // Ensure loader hides even if errors occur
+  }
+}; // Initialization block
 
 //--------------------------------------------------------------------------------
 
@@ -350,20 +357,20 @@ function addaBreak() {
 // Count the number of classes
 function countClass() {
   let count = 0;
-  const retrieveTasks = JSON.parse(localStorage.getItem("tasks"));
+  const retrieveTasks = JSON.parse(localStorage.getItem("tasks")) || {}; // safe fallback
   for (const key in retrieveTasks) {
-    retrieveTasks[key].forEach((e) => {
+    (retrieveTasks[key] || []).forEach((e) => {
       if (e.addaBreak === true) {
-        count++; // Count the number of tasks for the active tab
+        count++; // Count the number of break tasks
       }
     });
   }
 
   let count2 = 0;
-  for (i in tasks) {
-    count2 += tasks[i].length; // Count the number of tasks for the active tab
-  } // Count the number of tasks for the active tab
-  classCounter.innerHTML = `Total Classes: ${count2 - count}`; // Update the task count
+  for (let i in tasks) {
+    count2 += (tasks[i] || []).length; // Count all tasks
+  }
+  classCounter.innerHTML = `Total Classes: ${count2 - count}`; // Update the task count excluding breaks
 }
 
 // -------------------------------------------------------------------

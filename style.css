@@ -370,3 +370,12 @@ i {
   align-items: center;
   justify-content: center;
 }
+
+/* Mobile performance tweaks */
+@media (max-width: 768px) {
+  /* Avoid background-attachment: fixed on mobile to prevent paint issues */
+  main::before {
+    background-attachment: scroll;
+    background-position: center top;
+  }
+}

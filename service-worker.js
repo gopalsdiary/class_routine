@@ -1,4 +1,4 @@
-const cacheName = "classRoutineCache-v1.0.21"; // Updated cache version
+const cacheName = "classRoutineCache-v1.0.22"; // Updated cache version
 const assetsToCache = [
   "index.html",
   "style.css",
@@ -26,9 +26,18 @@ self.addEventListener("install", (event) => {
   console.log("[Service Worker] Installing...");
   self.skipWaiting();
   event.waitUntil(
-    caches.open(cacheName).then((cache) => {
+    caches.open(cacheName).then(async (cache) => {
       console.log("[Service Worker] Caching assets");
-      return cache.addAll(assetsToCache);
+      const results = await Promise.allSettled(
+        assetsToCache.map((url) => cache.add(url))
+      );
+      const failed = results.filter((r) => r.status === "rejected");
+      if (failed.length) {
+        console.warn(
+          "[Service Worker] Some assets failed to cache:",
+          failed.length
+        );
+      }
     })
   );
 });

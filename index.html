@@ -5,14 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Class Routine</title>
     <link rel="manifest" href="manifest.json" />
-    <!-- insert sortable library -->
-    <script src="./sortable.js"></script>
-    <!-- end -->
-    <script>
+    <meta name="theme-color" content="#1b242d" />
+    <!-- Load scripts deferred to improve mobile first paint -->
+    <script src="./sortable.js" defer></script>
+    <script defer>
+      // Improved service worker registration with error handling
       if ("serviceWorker" in navigator) {
         navigator.serviceWorker
           .register("service-worker.js")
-          .then(() => console.log("Service Worker Registered"));
+          .then(() => console.log("Service Worker Registered"))
+          .catch((err) => console.error("SW registration failed", err));
       }
     </script>
     <!-- raw css  -->
@@ -28,10 +30,9 @@
     />
   </head>
   <body>
-    <div id="loading">
-      <img src="./img/loading.gif" alt="gif" />
+    <div id="loading" aria-live="polite" aria-label="Loading">
+      <img src="./img/loading.gif" alt="Loading animation" />
       <p>One moment please...</p>
-      <!-- Load the page -->
     </div>
     <main>
       <section class="header">
@@ -171,10 +172,21 @@
     </main>
     <div class="classCounter">Total Classes: 0</div>
 
-    <script src="./time.js"></script>
-
-    <script src="./task.js"></script>
-
-    <script src="./pwa.js"></script>
+    <!-- Core app scripts deferred -->
+    <script src="./time.js" defer></script>
+    <script src="./task.js" defer></script>
+    <script src="./pwa.js" defer></script>
+    <script>
+      // Fallback & earlier hide for loader (in case onload errors on first mobile visit)
+      (function () {
+        function hideLoader() {
+          var l = document.getElementById("loading");
+          if (l) l.style.display = "none";
+        }
+        document.addEventListener("DOMContentLoaded", hideLoader);
+        window.addEventListener("load", hideLoader);
+        setTimeout(hideLoader, 5000); // safety timeout
+      })();
+    </script>
   </body>
 </html>
