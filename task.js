@@ -97,7 +97,7 @@ function displayTasks() {
     });
     deleteButton.addEventListener("pointerdown", (e) => {
       e.stopPropagation(); // Prevent event bubbling
-      const ok = window.confirm("আপনি কি মুছে ফেলতে চান?");
+      const ok = window.confirm("Delete this task?");
       if (ok) {
         deleteTask(index); // Delete the task when the delete button is clicked
         console.log("delete");
@@ -242,6 +242,7 @@ window.onload = () => {
     countClass(); // Update the task count
     tickTheClassByTheTime(); // Call the function to mark tasks as completed based on the time
     timeEnd = setInterval(tickTheClassByTheTime, 10000); // Check every 10 seconds
+    requestNotificationPermission(); // Ask for notification permission
   } catch (err) {
     console.error("Initialization error", err);
   } finally {
@@ -300,8 +301,9 @@ function tickTheClassByTheTime() {
   const currentTotalMinutes = currentHour * 60 + currentMinute;
 
   const retrieveTasks = JSON.parse(localStorage.getItem("tasks")) || {};
+  const todayKey = new Date().toLocaleString("en-us", { weekday: "short" });
 
-  const dayTasks = retrieveTasks[activeTab] || [];
+  const dayTasks = retrieveTasks[todayKey] || [];
   dayTasks.forEach((task) => {
     if (task.time) {
       // Parse task time as minutes since midnight
@@ -309,6 +311,11 @@ function tickTheClassByTheTime() {
       const taskTotalMinutes = taskHour * 60 + taskMinute;
       if (taskTotalMinutes <= currentTotalMinutes) {
         task.completed = true;
+        if (!task.notified && !task.addaBreak) {
+          // fire a notification once when time is reached/passed
+          sendTaskNotification(task);
+          task.notified = true;
+        }
         if (currentTotalMinutes > 960) {
           task.completed = false; // Reset tasks after 4 PM (960 minutes)
         }
@@ -317,7 +324,7 @@ function tickTheClassByTheTime() {
   });
 
   // Save and display updated tasks
-  retrieveTasks[activeTab] = dayTasks;
+  retrieveTasks[todayKey] = dayTasks;
   localStorage.setItem("tasks", JSON.stringify(retrieveTasks));
   displayTasks();
   if (currentTotalMinutes > 960) {
@@ -377,3 +384,46 @@ function countClass() {
 }
 
 // -------------------------------------------------------------------
+
+// ------------------------ Notifications -----------------------------
+function requestNotificationPermission() {
+  if (!("Notification" in window)) return; // not supported
+  if (Notification.permission === "default") {
+    try {
+      Notification.requestPermission().catch(() => {});
+    } catch (e) {
+      // Some browsers require callback form
+      Notification.requestPermission(function () {});
+    }
+  }
+}
+
+function sendTaskNotification(task) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+
+  const title = "Class Routine";
+  const body = `${task.name} - time reached${task.time ? ` (${task.time})` : ""}`;
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+      navigator.serviceWorker.ready.then((reg) => {
+        if (reg.showNotification) {
+          reg.showNotification(title, {
+            body,
+            badge: undefined,
+            icon: undefined,
+            vibrate: [100, 50, 100],
+            tag: `task-${task.id}`,
+          });
+        } else {
+          new Notification(title, { body });
+        }
+      });
+    } else {
+      new Notification(title, { body });
+    }
+  } catch (e) {
+    console.warn("Notification failed", e);
+  }
+}
+
