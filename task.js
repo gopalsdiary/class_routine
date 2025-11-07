@@ -8,6 +8,7 @@ function $$(selector) {
 
 let tasks = JSON.parse(localStorage.getItem("tasks")) || {}; // Initialize tasks from local storage. If no tasks are found, initialize with an empty object
 let timeEnd; // interval reference for ticking tasks
+let audioCtx; // for beep sound on notifications
 const currentDay = new Date().toLocaleString("en-us", {
   weekday: "short",
 }); // Get the current day in short format (e.g., "Mon", "Tue", etc.)
@@ -415,15 +416,58 @@ function sendTaskNotification(task) {
             vibrate: [100, 50, 100],
             tag: `task-${task.id}`,
           });
+          playBeep();
         } else {
           new Notification(title, { body });
+          playBeep();
         }
       });
     } else {
       new Notification(title, { body });
+      playBeep();
     }
   } catch (e) {
     console.warn("Notification failed", e);
+  }
+}
+
+// ------------------------ Beep sound -----------------------------
+function setupAudioUnlock() {
+  try {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audioCtx = new AC();
+    }
+    const unlock = () => {
+      if (audioCtx && audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
+      document.removeEventListener("pointerdown", unlock);
+      document.removeEventListener("keydown", unlock);
+      document.removeEventListener("touchstart", unlock);
+    };
+    document.addEventListener("pointerdown", unlock, { once: true });
+    document.addEventListener("keydown", unlock, { once: true });
+    document.addEventListener("touchstart", unlock, { once: true });
+  } catch (_) {}
+}
+
+function playBeep(duration = 200, frequency = 880, volume = 0.2) {
+  try {
+    setupAudioUnlock();
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = frequency;
+    gain.gain.value = volume;
+    osc.connect(gain).connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    osc.start(now);
+    osc.stop(now + duration / 1000);
+  } catch (e) {
+    console.warn("Beep failed", e);
   }
 }
 
