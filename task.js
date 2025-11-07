@@ -9,6 +9,7 @@ function $$(selector) {
 let tasks = JSON.parse(localStorage.getItem("tasks")) || {}; // Initialize tasks from local storage. If no tasks are found, initialize with an empty object
 let timeEnd; // interval reference for ticking tasks
 let audioCtx; // for beep sound on notifications
+let wakeLock = null; // Wake lock to prevent sleep during class hours
 const currentDay = new Date().toLocaleString("en-us", {
   weekday: "short",
 }); // Get the current day in short format (e.g., "Mon", "Tue", etc.)
@@ -34,6 +35,8 @@ const shadowPopup = $(".shadow-popup"); // Get the shadow popup element
 const addaBreakButton = $(".addaBreak"); // Get the button to add a break
 const taskTime = $("#taskTime"); // Get the element to display the task time
 const taskTime2 = $("#taskTime2"); // Get the element to display the task time
+const settingsButton = $("#settingsButton"); // Get the settings button
+const settingsPopup = $("#settingsPopup"); // Get the settings popup
 
 function initializeTabs() {
   tabsContainer.innerHTML = ""; // Clear existing tabs to avoid duplicates
@@ -244,6 +247,9 @@ window.onload = () => {
     tickTheClassByTheTime(); // Call the function to mark tasks as completed based on the time
     timeEnd = setInterval(tickTheClassByTheTime, 10000); // Check every 10 seconds
     requestNotificationPermission(); // Ask for notification permission
+    setupServiceWorkerMessaging(); // Listen for SW messages
+    requestWakeLock(); // Request wake lock for active class periods
+    scheduleUpcomingNotifications(); // Pre-schedule notifications
   } catch (err) {
     console.error("Initialization error", err);
   } finally {
@@ -305,6 +311,8 @@ function tickTheClassByTheTime() {
   const todayKey = new Date().toLocaleString("en-us", { weekday: "short" });
 
   const dayTasks = retrieveTasks[todayKey] || [];
+  let hasUpdates = false;
+
   dayTasks.forEach((task) => {
     if (task.time) {
       // Parse task time as minutes since midnight
@@ -316,6 +324,7 @@ function tickTheClassByTheTime() {
           // fire a notification once when time is reached/passed
           sendTaskNotification(task);
           task.notified = true;
+          hasUpdates = true;
         }
         if (currentTotalMinutes > 960) {
           task.completed = false; // Reset tasks after 4 PM (960 minutes)
@@ -325,9 +334,21 @@ function tickTheClassByTheTime() {
   });
 
   // Save and display updated tasks
-  retrieveTasks[todayKey] = dayTasks;
-  localStorage.setItem("tasks", JSON.stringify(retrieveTasks));
+  if (hasUpdates) {
+    retrieveTasks[todayKey] = dayTasks;
+    localStorage.setItem("tasks", JSON.stringify(retrieveTasks));
+  }
   displayTasks();
+  
+  // Also send to service worker for background checks
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage({
+      type: "TASKS_DATA",
+      tasks: retrieveTasks,
+      todayKey,
+    });
+  }
+
   if (currentTotalMinutes > 960) {
     clearInterval(timeEnd); // Stop checking after 4 PM
   }
@@ -388,14 +409,36 @@ function countClass() {
 
 // ------------------------ Notifications -----------------------------
 function requestNotificationPermission() {
-  if (!("Notification" in window)) return; // not supported
+  if (!("Notification" in window)) {
+    console.warn("Notifications not supported");
+    return;
+  }
+  
+  if (Notification.permission === "granted") {
+    console.log("Notification permission already granted");
+    return;
+  }
+  
   if (Notification.permission === "default") {
-    try {
-      Notification.requestPermission().catch(() => {});
-    } catch (e) {
-      // Some browsers require callback form
-      Notification.requestPermission(function () {});
-    }
+    // Request permission explicitly
+    Notification.requestPermission().then((permission) => {
+      console.log("Notification permission:", permission);
+      if (permission === "granted") {
+        // Show a test notification on Android to confirm it works
+        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+          navigator.serviceWorker.ready.then((reg) => {
+            reg.showNotification("Class Routine", {
+              body: "Notifications are enabled! You'll get alerts when tasks are due.",
+              icon: "icon-192x192.png",
+              vibrate: [200],
+              tag: "permission-granted",
+            });
+          });
+        }
+      }
+    }).catch((err) => {
+      console.error("Notification permission error:", err);
+    });
   }
 }
 
@@ -470,4 +513,219 @@ function playBeep(duration = 200, frequency = 880, volume = 0.2) {
     console.warn("Beep failed", e);
   }
 }
+
+// ------------------------ Service Worker Communication -----------------------------
+function setupServiceWorkerMessaging() {
+  if (!navigator.serviceWorker) return;
+
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "GET_TASKS") {
+      const tasks = JSON.parse(localStorage.getItem("tasks")) || {};
+      const todayKey = event.data.todayKey;
+      navigator.serviceWorker.controller.postMessage({
+        type: "TASKS_DATA",
+        tasks,
+        todayKey,
+      });
+    } else if (event.data && event.data.type === "MARK_NOTIFIED") {
+      // Mark task as notified when SW sends notification
+      const { taskId, todayKey } = event.data;
+      const tasks = JSON.parse(localStorage.getItem("tasks")) || {};
+      const dayTasks = tasks[todayKey] || [];
+      const task = dayTasks.find((t) => t.id === taskId);
+      if (task) {
+        task.notified = true;
+        localStorage.setItem("tasks", JSON.stringify(tasks));
+        displayTasks();
+      }
+    } else if (event.data && event.data.type === "MARK_COMPLETED") {
+      // Mark task as completed when user clicks "Done" in notification
+      const { taskId } = event.data;
+      const tasks = JSON.parse(localStorage.getItem("tasks")) || {};
+      const todayKey = new Date().toLocaleString("en-us", { weekday: "short" });
+      const dayTasks = tasks[todayKey] || [];
+      const taskIndex = dayTasks.findIndex((t) => t.id == taskId);
+      if (taskIndex !== -1) {
+        dayTasks[taskIndex].completed = true;
+        localStorage.setItem("tasks", JSON.stringify(tasks));
+        displayTasks();
+      }
+    }
+  });
+}
+
+// ------------------------ Wake Lock API -----------------------------
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator)) {
+    console.log("Wake Lock API not supported");
+    return;
+  }
+
+  try {
+    // Only request wake lock during active class hours (7 AM - 4 PM)
+    const now = new Date();
+    const hour = now.getHours();
+    if (hour >= 7 && hour < 16) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      console.log("Wake Lock active - screen will stay awake during classes");
+
+      wakeLock.addEventListener("release", () => {
+        console.log("Wake Lock released");
+      });
+
+      // Re-request if page becomes visible again
+      document.addEventListener("visibilitychange", async () => {
+        if (document.visibilityState === "visible" && !wakeLock) {
+          const nowCheck = new Date();
+          const hourCheck = nowCheck.getHours();
+          if (hourCheck >= 7 && hourCheck < 16) {
+            wakeLock = await navigator.wakeLock.request("screen");
+          }
+        }
+      });
+    }
+  } catch (err) {
+    console.error("Wake Lock error:", err);
+  }
+}
+
+// Release wake lock when not needed
+function releaseWakeLock() {
+  if (wakeLock) {
+    wakeLock.release().then(() => {
+      wakeLock = null;
+    });
+  }
+}
+
+// ------------------------ Notification Scheduling -----------------------------
+function scheduleUpcomingNotifications() {
+  if (!("Notification" in window) || Notification.permission !== "granted") {
+    return;
+  }
+
+  const enableReminders = localStorage.getItem("enableReminders") !== "false";
+  if (!enableReminders) return;
+
+  const tasks = JSON.parse(localStorage.getItem("tasks")) || {};
+  const todayKey = new Date().toLocaleString("en-us", { weekday: "short" });
+  const dayTasks = tasks[todayKey] || [];
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  dayTasks.forEach((task) => {
+    if (task.time && !task.addaBreak && !task.notified && !task.completed) {
+      const [hour, minute] = task.time.split(":").map(Number);
+      const taskMinutes = hour * 60 + minute;
+      const minutesUntil = taskMinutes - currentMinutes;
+
+      // Schedule notification 5 minutes before task time
+      if (minutesUntil > 5 && minutesUntil <= 60) {
+        const reminderDelay = (minutesUntil - 5) * 60 * 1000;
+        setTimeout(() => {
+          if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+            navigator.serviceWorker.ready.then((reg) => {
+              const enableVibration = localStorage.getItem("enableVibration") !== "false";
+              reg.showNotification("Class Routine - Reminder", {
+                body: `${task.name} starts in 5 minutes (${task.time})`,
+                icon: "icon-192x192.png",
+                badge: "icon-192x192.png",
+                vibrate: enableVibration ? [200] : [],
+                tag: `reminder-${task.id}`,
+                requireInteraction: false,
+              });
+            });
+          }
+        }, reminderDelay);
+        console.log(`Scheduled reminder for ${task.name} in ${minutesUntil - 5} minutes`);
+      }
+    }
+  });
+}
+
+// ------------------------ Settings Panel -----------------------------
+settingsButton.addEventListener("click", () => {
+  settingsPopup.style.display = "flex";
+  shadowPopup.style.display = "block";
+  updateSettingsUI();
+});
+
+$("#settingsClose").addEventListener("click", () => {
+  settingsPopup.style.display = "none";
+  shadowPopup.style.display = "none";
+});
+
+$("#testNotification").addEventListener("click", () => {
+  if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+    navigator.serviceWorker.ready.then((reg) => {
+      const enableVibration = localStorage.getItem("enableVibration") !== "false";
+      reg.showNotification("Test Notification 🔔", {
+        body: "This is a test notification from Class Routine!",
+        icon: "icon-192x192.png",
+        badge: "icon-192x192.png",
+        vibrate: enableVibration ? [200, 100, 200] : [],
+        tag: "test-notification",
+        requireInteraction: true,
+        actions: [
+          { action: "done", title: "✓ Got it!" },
+          { action: "snooze", title: "⏰ Snooze" },
+        ],
+      });
+    });
+  } else {
+    alert("Service Worker not ready. Please reload the page.");
+  }
+});
+
+$("#requestPermissionBtn").addEventListener("click", () => {
+  requestNotificationPermission();
+  setTimeout(updateSettingsUI, 500);
+});
+
+$("#enableReminders").addEventListener("change", (e) => {
+  localStorage.setItem("enableReminders", e.target.checked);
+  if (e.target.checked) {
+    scheduleUpcomingNotifications();
+  }
+});
+
+$("#enableVibration").addEventListener("change", (e) => {
+  localStorage.setItem("enableVibration", e.target.checked);
+});
+
+function updateSettingsUI() {
+  const permissionStatus = $("#permissionStatus");
+  const wakeLockStatus = $("#wakeLockStatus");
+  const enableReminders = $("#enableReminders");
+  const enableVibration = $("#enableVibration");
+
+  if ("Notification" in window) {
+    if (Notification.permission === "granted") {
+      permissionStatus.textContent = "✓ Granted";
+      permissionStatus.style.color = "#36f0a2";
+    } else if (Notification.permission === "denied") {
+      permissionStatus.textContent = "✗ Denied";
+      permissionStatus.style.color = "#f05236";
+    } else {
+      permissionStatus.textContent = "⚠ Not requested";
+      permissionStatus.style.color = "#f0a236";
+    }
+  } else {
+    permissionStatus.textContent = "Not supported";
+    permissionStatus.style.color = "#888";
+  }
+
+  if (wakeLock) {
+    wakeLockStatus.textContent = "✓ Active";
+    wakeLockStatus.style.color = "#36f0a2";
+  } else {
+    wakeLockStatus.textContent = "Inactive";
+    wakeLockStatus.style.color = "#888";
+  }
+
+  enableReminders.checked = localStorage.getItem("enableReminders") !== "false";
+  enableVibration.checked = localStorage.getItem("enableVibration") !== "false";
+}
+
+
 

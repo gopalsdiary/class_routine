@@ -50,6 +50,9 @@
         <button id="addTaskButton">
           <i class="fa-regular fa-circle-xmark"></i>
         </button>
+        <button id="settingsButton" title="Notification Settings">
+          <i class="fa-solid fa-gear"></i>
+        </button>
         <div class="shadow-popup"></div>
         <ul id="taskList" class="drag-area"></ul>
 
@@ -149,6 +152,44 @@
           <div class="btnHolder">
             <button id="editClosePopup">Cancel</button>
             <button id="editSave">Ok</button>
+          </div>
+        </div>
+        
+        <!-- Settings Popup for Notifications -->
+        <div id="settingsPopup">
+          <h3 style="margin-bottom:10px;">⚙️ Notification Settings</h3>
+          <div class="settings-item">
+            <span>Permission Status:</span>
+            <strong id="permissionStatus">Checking...</strong>
+          </div>
+          <div class="settings-item">
+            <span>Wake Lock:</span>
+            <strong id="wakeLockStatus">Inactive</strong>
+          </div>
+          <div class="settings-item">
+            <label>
+              <input type="checkbox" id="enableReminders" checked />
+              5-minute reminders before tasks
+            </label>
+          </div>
+          <div class="settings-item">
+            <label>
+              <input type="checkbox" id="enableVibration" checked />
+              Vibration alerts
+            </label>
+          </div>
+          <div class="settings-item">
+            <button id="testNotification" style="background-color:#36f0a2ad;">
+              🔔 Test Notification
+            </button>
+          </div>
+          <div class="settings-item">
+            <button id="requestPermissionBtn" style="background-color:#f0a236ad;">
+              🔓 Request Permission
+            </button>
+          </div>
+          <div class="btnHolder">
+            <button id="settingsClose">Close</button>
           </div>
         </div>
       </section>
