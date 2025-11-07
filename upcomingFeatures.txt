@@ -1,0 +1,4 @@
+1. Make a 3dot option for 'edit' and 'delete' options.
+2. Enlist the subjects in a separte page.
+3. Tick the classes that recently timed up
+4. 
